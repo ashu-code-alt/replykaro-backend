@@ -5,105 +5,62 @@ const cors = require("cors");
 const axios = require("axios");
 const multer = require("multer");
 const FormData = require("form-data");
-const fs = require("fs");
 require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 5050;
 
-// Middleware
+// CORS & JSON parsing
 app.use(cors());
 app.use(express.json());
 
-// Multer setup for uploads
-const upload = multer({ dest: "uploads/" });
+// In-memory file uploads  
+const upload = multer({ storage: multer.memoryStorage() });
 
-/**
- * POST /generate-reply
- * Body: { message, tone, goal }
- * Returns: { reply }
- */
 app.post("/generate-reply", async (req, res) => {
+  console.log("✅ /generate-reply", req.body);
   const { message, tone, goal } = req.body;
-  console.log("✅ /generate-reply hit:", req.body);
-
   const prompt = `
-You are an AI email assistant called ReplyKaro.
-Your job is to help the user write a tone-aware, purpose-driven email.
-
+You are ReplyKaro, an AI email assistant.
 User message: "${message}"
 Tone: ${tone}
 Goal: ${goal}
-
-Write a complete, natural, polite reply with emotional intelligence.
+Write a short, polite, emotionally intelligent reply.
   `;
-
   try {
     const apiRes = await axios.post(
       "https://api.openai.com/v1/chat/completions",
-      {
-        model: "gpt-4",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.7,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-      }
+      { model: "gpt-4", messages:[{role:"user",content:prompt}], temperature:0.7 },
+      { headers:{ Authorization:`Bearer ${process.env.OPENAI_API_KEY}` } }
     );
-    const reply = apiRes.data.choices[0].message.content;
-    res.json({ reply });
-  } catch (error) {
-    console.error("❌ OpenAI /generate-reply error:", error.response?.data || error.message);
-    res.status(500).json({ error: "Failed to generate reply." });
+    res.json({ reply: apiRes.data.choices[0].message.content });
+  } catch (err) {
+    console.error("❌ /generate-reply error", err.response?.data||err.message);
+    res.status(500).json({ error:"Failed to generate reply" });
   }
 });
 
-/**
- * POST /transcribe-audio
- * Form-Data: audio file under field name "audio"
- * Returns: { transcript }
- */
 app.post("/transcribe-audio", upload.single("audio"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No audio file uploaded." });
-  }
+  console.log("🎤 /transcribe-audio hit");
+  if (!req.file) return res.status(400).json({ error:"No file uploaded" });
 
-  const audioPath = req.file.path;
   try {
-    // Build FormData for Whisper
-    const formData = new FormData();
-    formData.append("file", fs.createReadStream(audioPath));
-    formData.append("model", "whisper-1");
+    const form = new FormData();
+    form.append("file", req.file.buffer, { filename:req.file.originalname });
+    form.append("model", "whisper-1");
 
-    // Call OpenAI Whisper API
     const whisperRes = await axios.post(
       "https://api.openai.com/v1/audio/transcriptions",
-      formData,
-      {
-        headers: {
-          ...formData.getHeaders(),
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-      }
+      form,
+      { headers:{ ...form.getHeaders(), Authorization:`Bearer ${process.env.OPENAI_API_KEY}` } }
     );
 
-    // Clean up temp file
-    fs.unlinkSync(audioPath);
-
-    // Return transcript
+    console.log("✅ Transcript:", whisperRes.data.text.slice(0,50));
     res.json({ transcript: whisperRes.data.text });
-  } catch (error) {
-    console.error("❌ Whisper transcription error:", error.response?.data || error.message);
-    // Ensure file is removed even on error
-    try { fs.unlinkSync(audioPath); } catch {}
-    res.status(500).json({ error: "Failed to transcribe audio." });
+  } catch (err) {
+    console.error("❌ /transcribe-audio error", err.response?.data||err.message);
+    res.status(500).json({ error:"Failed to transcribe audio" });
   }
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 ReplyKaro backend listening on http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Listening on http://localhost:${PORT}`));
