@@ -7,9 +7,11 @@ A secure Node.js + Express API backend for the ReplyKaro Chrome Extension. It us
 ## 🚀 How It Works
 
 POST `/generate-reply` with:
+
 ```json
 {
   "message": "I need to cancel tomorrow",
   "tone": "calm",
   "goal": "delay"
 }
+```
