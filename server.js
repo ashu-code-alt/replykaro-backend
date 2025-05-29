@@ -10,20 +10,23 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 5050;
 
-// Enable CORS and JSON body parsing
+// 1) Serve static privacy page
+app.use(express.static("public"));
+
+// 2) Enable CORS and JSON body parsing
 app.use(cors());
 app.use(express.json());
 
-// Configure multer for in-memory uploads
+// 3) Configure multer for in-memory uploads
 const upload = multer({ storage: multer.memoryStorage() });
 
-// POST /generate-reply
+// POST /generate-reply → { reply, score }
 app.post("/generate-reply", async (req, res) => {
   const { message, tone, goal } = req.body;
 
   try {
-    // 1) Generate the email draft
-    const draftResponse = await axios.post(
+    // a) Draft the email reply
+    const draftResp = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
         model: "gpt-4",
@@ -32,7 +35,7 @@ app.post("/generate-reply", async (req, res) => {
             role: "system",
             content: `
 You are ReplyKaro, a friendly, human-like email assistant.
-Write a response as a real person in the specified tone and goal.
+Write a real-person response in the specified tone and goal.
 Do NOT mention you are an AI.
             `.trim(),
           },
@@ -51,12 +54,11 @@ Do NOT mention you are an AI.
         },
       }
     );
+    const reply = draftResp.data.choices[0].message.content.trim();
+    console.log("📝 Reply:", reply);
 
-    const reply = draftResponse.data.choices[0].message.content.trim();
-    console.log("📝 Generated reply:", reply);
-
-    // 2) Evaluate success likelihood in strict JSON
-    const evalResponse = await axios.post(
+    // b) Evaluate success likelihood in strict JSON
+    const evalResp = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
         model: "gpt-4",
@@ -65,7 +67,7 @@ Do NOT mention you are an AI.
             role: "system",
             content: `
 You are an expert evaluator.
-On a scale from 0 to 100, rate how likely the following email reply will achieve the user's goal.
+On a scale from 0 to 100, rate how likely this reply will achieve the user's goal.
 Respond with ONLY valid JSON in this exact format, no extra text:
 
 {"score": <integer between 0 and 100>}
@@ -87,45 +89,37 @@ Respond with ONLY valid JSON in this exact format, no extra text:
       }
     );
 
-    const rawEval = evalResponse.data.choices[0].message.content.trim();
-    console.log("🔍 Raw evaluation JSON:", rawEval);
+    const rawEval = evalResp.data.choices[0].message.content.trim();
+    console.log("🔍 Raw eval JSON:", rawEval);
 
-    // 3) Parse JSON safely
+    // c) Parse JSON safely
     let score = 0;
     try {
       const parsed = JSON.parse(rawEval);
       if (
         typeof parsed.score === "number" &&
-        !isNaN(parsed.score) &&
         parsed.score >= 0 &&
         parsed.score <= 100
       ) {
         score = Math.round(parsed.score);
       } else {
-        console.warn("❗ Score out of range in parsed JSON:", parsed);
+        console.warn("❗ Score out of range:", parsed);
       }
-    } catch (parseError) {
-      console.warn("❗ Failed to parse evaluation JSON:", parseError.message);
+    } catch (e) {
+      console.warn("❗ Failed to parse JSON:", e.message);
     }
     console.log("✅ Parsed score:", score);
 
-    // 4) Return reply and score
     return res.json({ reply, score });
   } catch (err) {
-    console.error(
-      "❌ Error in /generate-reply:",
-      err.response?.data || err.message
-    );
+    console.error("❌ /generate-reply error:", err.response?.data || err.message);
     return res.status(500).json({ error: "Failed to generate reply or score." });
   }
 });
 
-// POST /transcribe-audio
+// POST /transcribe-audio → { transcript }
 app.post("/transcribe-audio", upload.single("audio"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No audio file uploaded." });
-  }
-
+  if (!req.file) return res.status(400).json({ error: "No audio uploaded." });
   try {
     const form = new FormData();
     form.append("file", req.file.buffer, { filename: req.file.originalname });
@@ -147,14 +141,14 @@ app.post("/transcribe-audio", upload.single("audio"), async (req, res) => {
     return res.json({ transcript });
   } catch (err) {
     console.error(
-      "❌ Error in /transcribe-audio:",
+      "❌ /transcribe-audio error:",
       err.response?.data || err.message
     );
     return res.status(500).json({ error: "Failed to transcribe audio." });
   }
 });
 
-// Start server
+// Start the server
 app.listen(PORT, () => {
   console.log(`🚀 Listening on http://localhost:${PORT}`);
 });
