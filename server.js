@@ -26,11 +26,15 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 // 5) POST /generate-reply → returns { reply, score }
+// replykaro-backend/server.js
+// … keep your imports, health-check, CORS, JSON, multer, /transcribe-audio, etc. above …
+
+// POST /generate-reply → { replies: string[], scores: number[] }
 app.post("/generate-reply", async (req, res) => {
-  const { message, tone, goal } = req.body;
+  const { message, tone, goal, variants = 3 } = req.body;
 
   try {
-    // a) Draft the reply
+    // 1) Generate N drafts in one API call
     const draftResp = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -51,6 +55,7 @@ Do NOT mention you are an AI.
         ],
         temperature: 0.7,
         max_tokens: 350,
+        n: variants,                // <-- ask for multiple completions
       },
       {
         headers: {
@@ -59,68 +64,59 @@ Do NOT mention you are an AI.
         },
       }
     );
-    const reply = draftResp.data.choices[0].message.content.trim();
-    console.log("📝 Reply:", reply);
 
-    // b) Evaluate success likelihood in strict JSON
-    const evalResp = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        model: "gpt-4",
-        messages: [
-          {
-            role: "system",
-            content: `
+    const replies = draftResp.data.choices.map(c => c.message.content.trim());
+    console.log(`📝 Generated ${replies.length} drafts`);
+
+    // 2) Evaluate each draft’s success likelihood
+    const scorePromises = replies.map(async replyText => {
+      const evalResp = await axios.post(
+        "https://api.openai.com/v1/chat/completions",
+        {
+          model: "gpt-4",
+          messages: [
+            {
+              role: "system",
+              content: `
 You are an expert evaluator.
 On a scale from 0 to 100, rate how likely this reply will achieve the user's goal.
 Respond with ONLY valid JSON in this exact format, no extra text:
 
 {"score": <integer between 0 and 100>}
-            `.trim(),
-          },
-          {
-            role: "user",
-            content: `Reply:\n${reply}\n\nGoal: ${goal}`,
-          },
-        ],
-        temperature: 0,
-        max_tokens: 10,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
+              `.trim(),
+            },
+            {
+              role: "user",
+              content: `Reply:\n${replyText}\n\nGoal: ${goal}`,
+            },
+          ],
+          temperature: 0,
+          max_tokens: 10,
         },
-      }
-    );
-    const rawEval = evalResp.data.choices[0].message.content.trim();
-    console.log("🔍 Raw eval JSON:", rawEval);
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
 
-    // c) Parse JSON safely
-    let score = 0;
-    try {
-      const parsed = JSON.parse(rawEval);
-      if (
-        typeof parsed.score === "number" &&
-        parsed.score >= 0 &&
-        parsed.score <= 100
-      ) {
-        score = Math.round(parsed.score);
-      } else {
-        console.warn("❗ Score out of range:", parsed);
+      // parse their JSON
+      try {
+        const parsed = JSON.parse(evalResp.data.choices[0].message.content);
+        return Number.isFinite(parsed.score) ? Math.round(parsed.score) : 0;
+      } catch {
+        return 0;
       }
-    } catch (e) {
-      console.warn("❗ JSON parse failed:", e.message);
-    }
-    console.log("✅ Parsed score:", score);
+    });
 
-    return res.json({ reply, score });
+    const scores = await Promise.all(scorePromises);
+    console.log("✅ Scores:", scores);
+
+    return res.json({ replies, scores });
   } catch (err) {
-    console.error(
-      "❌ /generate-reply error:",
-      err.response?.data || err.message
-    );
-    return res.status(500).json({ error: "Failed to generate reply or score." });
+    console.error("❌ /generate-reply error:", err.response?.data || err.message);
+    return res.status(500).json({ error: "Failed to generate drafts or scores." });
   }
 });
 
