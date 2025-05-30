@@ -10,22 +10,27 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 5050;
 
-// 1) Serve static privacy page
+// 1) Health-check endpoint
+app.get("/", (req, res) => {
+  res.send("OK");
+});
+
+// 2) Serve static files (privacy policy)
 app.use(express.static("public"));
 
-// 2) Enable CORS and JSON body parsing
+// 3) Enable CORS & JSON parsing
 app.use(cors());
 app.use(express.json());
 
-// 3) Configure multer for in-memory uploads
+// 4) Multer setup for in-memory audio uploads
 const upload = multer({ storage: multer.memoryStorage() });
 
-// POST /generate-reply → { reply, score }
+// 5) POST /generate-reply → returns { reply, score }
 app.post("/generate-reply", async (req, res) => {
   const { message, tone, goal } = req.body;
 
   try {
-    // a) Draft the email reply
+    // a) Draft the reply
     const draftResp = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -88,7 +93,6 @@ Respond with ONLY valid JSON in this exact format, no extra text:
         },
       }
     );
-
     const rawEval = evalResp.data.choices[0].message.content.trim();
     console.log("🔍 Raw eval JSON:", rawEval);
 
@@ -106,23 +110,30 @@ Respond with ONLY valid JSON in this exact format, no extra text:
         console.warn("❗ Score out of range:", parsed);
       }
     } catch (e) {
-      console.warn("❗ Failed to parse JSON:", e.message);
+      console.warn("❗ JSON parse failed:", e.message);
     }
     console.log("✅ Parsed score:", score);
 
     return res.json({ reply, score });
   } catch (err) {
-    console.error("❌ /generate-reply error:", err.response?.data || err.message);
+    console.error(
+      "❌ /generate-reply error:",
+      err.response?.data || err.message
+    );
     return res.status(500).json({ error: "Failed to generate reply or score." });
   }
 });
 
-// POST /transcribe-audio → { transcript }
+// 6) POST /transcribe-audio → returns { transcript }
 app.post("/transcribe-audio", upload.single("audio"), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No audio uploaded." });
+  if (!req.file) {
+    return res.status(400).json({ error: "No audio uploaded." });
+  }
   try {
     const form = new FormData();
-    form.append("file", req.file.buffer, { filename: req.file.originalname });
+    form.append("file", req.file.buffer, {
+      filename: req.file.originalname,
+    });
     form.append("model", "whisper-1");
 
     const whisperRes = await axios.post(
@@ -148,7 +159,7 @@ app.post("/transcribe-audio", upload.single("audio"), async (req, res) => {
   }
 });
 
-// Start the server
+// 7) Start the server
 app.listen(PORT, () => {
   console.log(`🚀 Listening on http://localhost:${PORT}`);
 });
